@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
     const senderName = session.name || 'Atendente'
     const outboundContent = type === 'TEXT' ? `${senderName}:\n\n${content}` : content
     let status = 'SENT'
+    let whatsappId: string | null = null
 
     // Envia via Baileys (global._waService definido no server.js)
     if (!isPrivate) {
@@ -66,7 +67,9 @@ export async function POST(req: NextRequest) {
         try {
           const phone = conversation.contact.phone.replace(/\D/g, '')
           const jid   = `${phone}@s.whatsapp.net`
-          await wa.sendMessage(jid, { type: type.toLowerCase(), content: outboundContent, filePath: mediaUrl })
+          const sentId = await wa.sendMessage(jid, { type: type.toLowerCase(), content: outboundContent, filePath: mediaUrl })
+          if (sentId) whatsappId = sentId
+          if (sentId) status = 'SENT'
         } catch (e: any) {
           console.error('[Messages/POST] Erro ao enviar:', e.message)
           status = 'FAILED'
@@ -93,6 +96,7 @@ export async function POST(req: NextRequest) {
         type,
         content,
         mediaUrl,
+        whatsappId: whatsappId ?? undefined,
         status,
         isPrivate,
         metadata: JSON.stringify({ senderName }),

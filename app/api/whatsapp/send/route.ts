@@ -32,8 +32,9 @@ export async function POST(req: NextRequest) {
         try {
           const phone = conversation.contact.phone
           const jid   = `${phone.replace(/\D/g, '')}@s.whatsapp.net`
-          await wa.sendMessage(jid, { type: type.toLowerCase(), content: outboundContent })
-          status = 'SENT'
+          const sentId = await wa.sendMessage(jid, { type: type.toLowerCase(), content: outboundContent })
+          if (sentId) whatsappId = sentId
+          status = sentId ? 'SENT' : 'FAILED'
         } catch (e: any) {
           console.error('[Send] Erro:', e.message)
           status = 'FAILED'

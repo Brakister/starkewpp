@@ -42,7 +42,7 @@ const globalForWA = globalThis as unknown as {
     clearSession: () => void
     getStatus: () => { connected: boolean; hasQR: boolean }
     getQR: () => string | null
-    sendMessage: (jid: string, payload: { type: string; content?: string; filePath?: string; mimeType?: string; fileName?: string }) => Promise<void>
+    sendMessage: (jid: string, payload: { type: string; content?: string; filePath?: string; mimeType?: string; fileName?: string }) => Promise<string | null>
   }
 }
 
@@ -205,7 +205,12 @@ export async function connectWhatsApp() {
         fromMe: msg.key.fromMe,
         hasMessage: !!msg.message,
       })
-      if (msg.key.fromMe) continue
+      if (msg.key.fromMe) {
+        await handleOutgoingMessage(msg).catch(err =>
+          console.error('[Baileys] Erro ao processar mensagem enviada:', err)
+        )
+        continue
+      }
       const jid = msg.key.remoteJid || ''
       if (isJidGroup(jid)) continue // ignora grupos
       if (isJidBroadcast(jid) || jid === 'status@broadcast') continue // ignora status/broadcast
@@ -225,7 +230,12 @@ export async function connectWhatsApp() {
     const cutoff = Date.now() - twoDaysMs
     for (const msg of messages) {
       const jid = msg.key.remoteJid || ''
-      if (msg.key.fromMe) continue
+      if (msg.key.fromMe) {
+        await handleOutgoingMessage(msg).catch(err =>
+          console.error('[Baileys] Erro ao processar histórico enviado:', err)
+        )
+        continue
+      }
       if (isJidGroup(jid)) continue
       if (isJidBroadcast(jid) || jid === 'status@broadcast') continue
 
@@ -334,59 +344,63 @@ function resolveLocalPath(filePath?: string) {
   return fs.existsSync(normalized) ? normalized : null
 }
 
-async function sendViaAdapter(jid: string, payload: { type: string; content?: string; filePath?: string; mimeType?: string; fileName?: string }) {
+async function sendViaAdapter(jid: string, payload: { type: string; content?: string; filePath?: string; mimeType?: string; fileName?: string }): Promise<string | null> {
   const type = payload.type.toLowerCase()
   const text = payload.content || ''
   const localPath = resolveLocalPath(payload.filePath)
 
   if (type === 'text') {
-    await sendText(jid, text)
-    return
+    return await sendText(jid, text)
   }
 
   if (type === 'image') {
     if (localPath) {
-      await sock?.sendMessage(toJID(jid), { image: fs.readFileSync(localPath), caption: text })
+      const result = await sock?.sendMessage(toJID(jid), { image: fs.readFileSync(localPath), caption: text })
+      return result?.key.id ?? null
     } else if (payload.filePath) {
-      await sendImage(jid, payload.filePath, text)
+      return await sendImage(jid, payload.filePath, text)
     }
-    return
+    return null
   }
 
   if (type === 'audio') {
     if (localPath) {
-      await sock?.sendMessage(toJID(jid), { audio: fs.readFileSync(localPath), mimetype: payload.mimeType || 'audio/mpeg', ptt: false })
+      const result = await sock?.sendMessage(toJID(jid), { audio: fs.readFileSync(localPath), mimetype: payload.mimeType || 'audio/mpeg', ptt: false })
+      return result?.key.id ?? null
     } else if (payload.filePath) {
-      await sendAudio(jid, payload.filePath)
+      return await sendAudio(jid, payload.filePath)
     }
-    return
+    return null
   }
 
   if (type === 'video') {
     if (localPath) {
-      await sock?.sendMessage(toJID(jid), { video: fs.readFileSync(localPath), caption: text, mimetype: payload.mimeType || 'video/mp4' })
+      const result = await sock?.sendMessage(toJID(jid), { video: fs.readFileSync(localPath), caption: text, mimetype: payload.mimeType || 'video/mp4' })
+      return result?.key.id ?? null
     } else if (payload.filePath) {
-      await sendVideo(jid, payload.filePath, text)
+      return await sendVideo(jid, payload.filePath, text)
     }
-    return
+    return null
   }
 
   if (type === 'document') {
     if (localPath) {
-      await sock?.sendMessage(toJID(jid), {
+      const result = await sock?.sendMessage(toJID(jid), {
         document: fs.readFileSync(localPath),
         mimetype: payload.mimeType || 'application/octet-stream',
         fileName: payload.fileName || path.basename(localPath),
         caption: text,
       })
+      return result?.key.id ?? null
     } else if (payload.filePath) {
-      await sendDocument(jid, payload.filePath, payload.fileName || 'arquivo', payload.mimeType || 'application/octet-stream')
+      return await sendDocument(jid, payload.filePath, payload.fileName || 'arquivo', payload.mimeType || 'application/octet-stream')
     }
-    return
+    return null
   }
 
   // fallback
-  if (text) await sendText(jid, text)
+  if (text) return await sendText(jid, text)
+  return null
 }
 
 // Adapter global para as API routes
@@ -399,7 +413,7 @@ globalForWA._waService = {
   getQR: () => qrCode,
   sendMessage: async (jid, payload) => {
     if (!sock) throw new Error('WhatsApp não conectado')
-    await sendViaAdapter(jid, payload)
+    return await sendViaAdapter(jid, payload)
   },
 }
 
@@ -493,6 +507,70 @@ async function handleIncomingMessage(
     await dispatchWebhook('conversation_started', { conversation, contact })
     await triggerBotResponse(conversation.id, phone, rawContent)
   }
+}
+
+// ─── PROCESSAR MENSAGEM ENVIADA (FROM ME) ────────────────────────────────────
+
+async function handleOutgoingMessage(msg: proto.IWebMessageInfo) {
+  const from = msg.key.remoteJid!
+  const phone = fromJID(from)
+  const msgId = msg.key.id!
+
+  if (isJidGroup(from)) return
+  if (isJidBroadcast(from) || from === 'status@broadcast') return
+
+  const { content, type, mediaUrl } = await parseAndDownload(msg)
+  if (!content && !mediaUrl) return
+
+  const existingContact = await prisma.contact.findUnique({ where: { phone } }).catch(() => null)
+  const contact = await prisma.contact.upsert({
+    where:  { phone },
+    create: { phone, name: existingContact?.name || undefined, avatar: existingContact?.avatar || undefined },
+    update: {},
+  })
+
+  let conversation = await prisma.conversation.findFirst({
+    where: { contactId: contact.id, status: { in: ['OPEN', 'IN_PROGRESS', 'WAITING'] } },
+    orderBy: { updatedAt: 'desc' },
+  })
+
+  if (!conversation) {
+    conversation = await prisma.conversation.create({
+      data: { contactId: contact.id, status: 'OPEN' },
+    })
+  }
+
+  if (msgId) {
+    const dup = await prisma.message.findFirst({ where: { whatsappId: msgId } })
+    if (dup) return
+  }
+
+  const savedMsg = await prisma.message.create({
+    data: {
+      conversationId: conversation.id,
+      senderType: 'AGENT',
+      type,
+      content,
+      mediaUrl,
+      whatsappId: msgId,
+      status: 'SENT',
+      metadata: JSON.stringify({ senderName: 'WhatsApp' }),
+    },
+  })
+
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      lastMessage:   content.substring(0, 100),
+      lastMessageAt: new Date(),
+    },
+  })
+
+  emitToRoom('conversations', 'new_message', {
+    conversationId: conversation.id,
+    message: savedMsg,
+    contactId: contact.id,
+  })
 }
 
 // ─── BOT ─────────────────────────────────────────────────────────────────────
