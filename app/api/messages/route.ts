@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
       include: {
         sender: { select: { id: true, name: true, avatar: true, role: true } }
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: 100,
     })
 
@@ -29,7 +29,8 @@ export async function GET(req: NextRequest) {
       data:  { unreadCount: 0 }
     })
 
-    return NextResponse.json({ success: true, data: messages })
+    // Return in chronological order for the UI
+    return NextResponse.json({ success: true, data: messages.reverse() })
   } catch (err) {
     console.error('[Messages/GET]', err)
     return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 })

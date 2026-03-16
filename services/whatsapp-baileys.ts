@@ -33,6 +33,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempts = 0
 const MAX_RECONNECT = 5
 let globalHandlersReady = false
+const ENABLE_HISTORY_SYNC = false
 const globalForWA = globalThis as unknown as {
   _waService?: {
     isConnected: () => boolean
@@ -193,8 +194,17 @@ export async function connectWhatsApp() {
   // ─── MENSAGENS RECEBIDAS ──────────────────────────────────────────────────
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return
+    if (type !== 'notify' && type !== 'append') {
+      console.log(`[Baileys] messages.upsert ignorado: ${type} (${messages.length})`)
+      return
+    }
     for (const msg of messages) {
+      console.log('[Baileys] messages.upsert', {
+        type,
+        from: msg.key.remoteJid,
+        fromMe: msg.key.fromMe,
+        hasMessage: !!msg.message,
+      })
       if (msg.key.fromMe) continue
       const jid = msg.key.remoteJid || ''
       if (isJidGroup(jid)) continue // ignora grupos
@@ -207,6 +217,10 @@ export async function connectWhatsApp() {
 
   // ─── HISTÓRICO (últimos 2 dias) ─────────────────────────────────────────
   sock.ev.on('messaging-history.set', async ({ messages }) => {
+    if (!ENABLE_HISTORY_SYNC) {
+      console.log('[Baileys] Histórico ignorado (desativado para evitar travar mensagens atuais).')
+      return
+    }
     const twoDaysMs = 2 * 24 * 60 * 60 * 1000
     const cutoff = Date.now() - twoDaysMs
     for (const msg of messages) {
