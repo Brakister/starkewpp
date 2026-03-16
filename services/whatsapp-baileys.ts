@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ZapFlow - WhatsApp via Baileys (QR Code)
  * Custo zero — funciona como WhatsApp Web
  */

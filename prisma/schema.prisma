@@ -1,0 +1,339 @@
+// ZapFlow - Prisma Schema (SQLite compatible - no enums)
+// SQLite does not support enums. Values enforced at application level.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// role: AGENT | MANAGER | ADMIN  /  status: ONLINE | BUSY | OFFLINE
+model User {
+  id         String    @id @default(cuid())
+  name       String
+  email      String    @unique
+  password   String
+  role       String    @default("AGENT")
+  avatar     String?
+  status     String    @default("OFFLINE")
+  lastSeenAt DateTime?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  teams         TeamMember[]
+  conversations ConversationAssignment[]
+  messages      Message[]
+  sessions      Session[]
+  webhooks      Webhook[]
+  reportMetrics ReportMetric[]
+  quickReplies  QuickReply[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  color       String   @default("#6366f1")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members       TeamMember[]
+  conversations Conversation[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+model Contact {
+  id         String   @id @default(cuid())
+  phone      String   @unique
+  name       String?
+  email      String?
+  avatar     String?
+  notes      String?
+  isBlocked  Boolean  @default(false)
+  assignedTo String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  conversations Conversation[]
+  tags          ContactTag[]
+
+  @@map("contacts")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#10b981")
+  createdAt DateTime @default(now())
+
+  conversations ConversationTag[]
+  contacts      ContactTag[]
+
+  @@map("tags")
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@map("contact_tags")
+}
+
+model ConversationTag {
+  conversationId String
+  tagId          String
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@map("conversation_tags")
+}
+
+// status: OPEN | IN_PROGRESS | WAITING | CLOSED
+model Conversation {
+  id            String    @id @default(cuid())
+  contactId     String
+  teamId        String?
+  status        String    @default("OPEN")
+  isPrivate     Boolean   @default(false)
+  subject       String?
+  lastMessage   String?
+  lastMessageAt DateTime?
+  unreadCount   Int       @default(0)
+  metadata      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  closedAt      DateTime?
+
+  contact     Contact                  @relation(fields: [contactId], references: [id])
+  team        Team?                    @relation(fields: [teamId], references: [id])
+  messages    Message[]
+  assignments ConversationAssignment[]
+  tags        ConversationTag[]
+
+  @@map("conversations")
+}
+
+model ConversationAssignment {
+  id             String   @id @default(cuid())
+  conversationId String
+  userId         String
+  assignedAt     DateTime @default(now())
+  isActive       Boolean  @default(true)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("conversation_assignments")
+}
+
+// senderType: CONTACT | AGENT | BOT | SYSTEM
+// type: TEXT | IMAGE | AUDIO | VIDEO | DOCUMENT | STICKER | LOCATION | TEMPLATE
+// status: PENDING | SENT | DELIVERED | READ | FAILED
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  senderId       String?
+  senderType     String    @default("CONTACT")
+  type           String    @default("TEXT")
+  content        String
+  mediaUrl       String?
+  mediaType      String?
+  status         String    @default("SENT")
+  whatsappId     String?   @unique
+  isBot          Boolean   @default(false)
+  isPrivate      Boolean   @default(false)
+  metadata       String?
+  createdAt      DateTime  @default(now())
+  readAt         DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?        @relation(fields: [senderId], references: [id])
+
+  @@map("messages")
+}
+
+model QuickReply {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  shortcut  String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("quick_replies")
+}
+
+model BotConfig {
+  id            String   @id @default(cuid())
+  name          String
+  isActive      Boolean  @default(false)
+  welcomeMsg    String?
+  fallbackMsg   String?
+  transferMsg   String?
+  autoTransfer  Boolean  @default(true)
+  transferDelay Int      @default(30)
+  aiEnabled     Boolean  @default(false)
+  aiPrompt      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  flows BotFlow[]
+
+  @@map("bot_configs")
+}
+
+model BotFlow {
+  id          String   @id @default(cuid())
+  botConfigId String
+  trigger     String
+  response    String
+  action      String?
+  actionData  String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  botConfig BotConfig @relation(fields: [botConfigId], references: [id], onDelete: Cascade)
+
+  @@map("bot_flows")
+}
+
+// status: DRAFT | SCHEDULED | RUNNING | PAUSED | COMPLETED | FAILED
+model BulkCampaign {
+  id          String    @id @default(cuid())
+  name        String
+  message     String
+  status      String    @default("DRAFT")
+  totalCount  Int       @default(0)
+  sentCount   Int       @default(0)
+  failedCount Int       @default(0)
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  recipients CampaignRecipient[]
+
+  @@map("bulk_campaigns")
+}
+
+// status: PENDING | SENT | DELIVERED | FAILED
+model CampaignRecipient {
+  id         String    @id @default(cuid())
+  campaignId String
+  phone      String
+  name       String?
+  status     String    @default("PENDING")
+  sentAt     DateTime?
+  error      String?
+
+  campaign BulkCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_recipients")
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  secret    String?
+  events    String
+  isActive  Boolean  @default(true)
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User       @relation(fields: [userId], references: [id])
+  logs WebhookLog[]
+
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id         String   @id @default(cuid())
+  webhookId  String
+  event      String
+  payload    String
+  statusCode Int?
+  response   String?
+  success    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@map("webhook_logs")
+}
+
+model ReportMetric {
+  id                  String   @id @default(cuid())
+  userId              String?
+  teamId              String?
+  date                DateTime
+  totalConversations  Int      @default(0)
+  closedConversations Int      @default(0)
+  avgResponseTime     Float    @default(0)
+  avgWaitTime         Float    @default(0)
+  messagesSent        Int      @default(0)
+  messagesReceived    Int      @default(0)
+  createdAt           DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("report_metrics")
+}
+
+model WhatsAppConfig {
+  id            String   @id @default(cuid())
+  phoneNumberId String   @unique
+  displayName   String
+  accessToken   String
+  webhookSecret String?
+  businessId    String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("whatsapp_configs")
+}
